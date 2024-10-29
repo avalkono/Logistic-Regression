@@ -1,0 +1,114 @@
+---
+title: "Logistic Regression HW 2"
+output: html_document
+date: "2024-09-02"
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(car)
+library(stats)
+library(UsingR)
+library(AmesHousing)
+library(car)
+library(DescTools)
+library(corrplot)
+library(mgcv)
+library(visreg)
+library(DataExplorer)
+library(Hmisc)
+```
+
+```{r}
+train_bin <- read.csv('insurance_t_bin.csv')
+test_bin <- read.csv('insurance_v_bin.csv')
+```
+
+
+```{r}
+#Replace missing values with missing category
+train_bin = train_bin %>% replace(is.na(.), 'M')
+unique(train_bin$DDABAL_BIN)
+```
+
+```{r}
+#Test all variables for separation issues
+variables = names(train_bin)
+
+testing = sapply(variables, function(var){
+  print(var)
+  print(table(train_bin[[var]], train_bin$INS))
+})
+
+```
+Quasi-complete separation: CASHBK, MMCRED
+
+```{r}
+#Fix separation issues by combining categories
+train_bin$CASHBK.c <- as.character(train_bin$CASHBK)
+train_bin$CASHBK.c[which(train_bin$CASHBK > 0)] <- "1+"
+table(train_bin$CASHBK.c, train_bin$INS)
+
+train_bin$MMCRED.c <- as.character(train_bin$MMCRED)
+train_bin$MMCRED.c[which(train_bin$MMCRED > 2)] <- "3+"
+table(train_bin$MMCRED.c, train_bin$INS)
+```
+
+
+```{r}
+#make all variables factors
+train_bin <- data.frame(lapply(train_bin, as.factor))
+
+#Backward Selection
+full.model <- glm(INS~., data = train_bin, family = binomial(link = "logit"))
+
+back.model <- step(full.model, direction = "backward", k=qchisq(0.002, 1, lower.tail = FALSE))
+```
+
+```{r}
+back.model = glm(INS ~ DDA + NSF + IRA + INV + MTG + CC + DDABAL_BIN + CHECKS_BIN + 
+    TELLER_BIN + SAVBAL_BIN + ATMAMT_BIN + CDBAL_BIN + ILSBAL_BIN + 
+    MMBAL_BIN, data=train_bin, family = binomial(link = "logit"))
+
+summary(back.model)
+
+#Get p-values for each variable
+car::Anova(back.model,  test = "LR", type = "III", singular.ok = TRUE)
+
+```
+
+```{r}
+#Calculate odds ratios
+odds_ratios <- exp(coef(back.model))
+
+sort(odds_ratios)
+```
+
+
+```{r}
+#interactions using forward selection
+int.model <- glm( INS ~ (DDA + NSF + IRA + INV + MTG + CC + DDABAL_BIN + CHECKS_BIN + 
+    TELLER_BIN + SAVBAL_BIN + ATMAMT_BIN + CDBAL_BIN + ILSBAL_BIN + 
+    MMBAL_BIN)^2, data=train_bin, family = binomial(link = "logit"))
+
+for.model <- step(back.model,
+                  scope = list(lower=formula(back.model),
+                               upper=formula(int.model)),
+                  direction = "forward", k = qchisq(0.002, 1, lower.tail = FALSE))
+```
+```{r}
+int.model <- glm(INS ~ DDA + NSF + IRA + INV + MTG + CC + DDABAL_BIN + CHECKS_BIN + 
+    TELLER_BIN + SAVBAL_BIN + ATMAMT_BIN + CDBAL_BIN + ILSBAL_BIN + 
+    MMBAL_BIN + DDA:IRA, data=train_bin, family = binomial(link = "logit"))
+
+car:: Anova(int.model,  test = "LR", type = "III", singular.ok = TRUE)
+```
+
+```{r}
+summary(int.model)
+```
+
+
+
