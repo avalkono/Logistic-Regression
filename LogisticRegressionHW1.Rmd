@@ -1,0 +1,222 @@
+---
+title: "Logistic Regression Homework"
+output: html_document
+date: "2024-08-20"
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(car)
+library(stats)
+library(UsingR)
+library(AmesHousing)
+library(car)
+library(DescTools)
+library(corrplot)
+library(mgcv)
+library(visreg)
+library(DataExplorer)
+```
+
+```{r}
+train <- read.csv('insurance_t.csv')
+test <- read.csv('insurance_v.csv')
+```
+
+**Phase 1**
+Binary Variables:
+```{r}
+#Select binary variables
+binary_vars <- c("DDA", "DIRDEP", "NSF", "SAV", "ATM", "CD", "IRA", "LOC", "INV", "ILS", "MM", "MTG", "CC", "SDB", "HMOWN", "MOVED", "INAREA", "INS")
+
+# Apply Mantel-Haenszel Test
+binary_results <- sapply(binary_vars, function(var) {
+  test <- CMHtest(table(train[[var]], train$INS))$table[1,]
+  return(c(var,  test[1], test[3]))
+})
+
+# Convert to data frame and rank by p-value
+binary_results_df <- as.data.frame(t(binary_results))
+names(binary_results_df) <- c("Variable", "Chi-Square Statistic", "P-Value")
+binary_results_df <- binary_results_df %>% arrange(as.numeric(`P-Value`))
+binary_results_df[-1,]
+```
+
+
+Ordinal Variables:
+```{r}
+#Select ordinal variables
+ordinal_vars <- c("CASHBK", "MMCRED", "CCPURC")  
+
+# Apply Mantel-Haenszel Test
+ordinal_results <- sapply(ordinal_vars, function(var) {
+  test <- CMHtest(table(train[[var]], train$INS))$table[1,]
+  return(c(var,  test[1], test[3]))
+})
+
+# Convert to data frame and rank by p-value
+ordinal_results_df <- as.data.frame(t(ordinal_results))
+names(ordinal_results_df) <- c("Variable", "Correlation", "P-Value")
+ordinal_results_df <- ordinal_results_df %>% arrange(as.numeric(`P-Value`))
+ordinal_results_df
+```
+
+
+Nominal Variables:
+```{r}
+#Select Nominal Variables
+nominal_vars <- c("BRANCH", "RES")
+
+#Apply Chi Sq Test
+nominal_results <- sapply(nominal_vars, function(var) {
+  test <- chisq.test(table(train[[var]], train$INS))
+  return(c(var, test$statistic, test$p.value))
+})
+
+# Convert to data frame and rank by p-value
+nominal_results_df <- as.data.frame(t(nominal_results))
+names(nominal_results_df) <- c("Variable", "Chi-Square Statistic", "P-Value")
+nominal_results_df <- nominal_results_df %>% arrange(as.numeric(`P-Value`))
+nominal_results_df
+```
+
+Continuous Variables:
+```{r}
+#Determine the variables with more than 10 distinct values
+names(train[sapply(train, function(x) n_distinct(x))>10])
+
+#Select continuous variables
+continuous_vars <- c("ACCTAGE", "DDABAL", "DEP", "DEPAMT", "CHECKS", "NSFAMT", "PHONE", "TELLER", "SAVBAL", "ATMAMT", "POS", "POSAMT", "CDBAL", "IRABAL", "LOCBAL", "INVBAL", "ILSBAL", "MMBAL", "MTGBAL", "CCBAL", "INCOME", "LORES", "HMVAL", "AGE" , "CRSCORE")
+
+# Apply t-test
+continuous_results <- sapply(continuous_vars, function(var) {
+  formula <- as.formula(paste("INS ~", var))
+  mod <- glm(formula, data=train, family=binomial(link="logit"))
+  test <- unname(summary(mod)$coefficients[,4])[2]
+  return(c(var, test))
+})
+
+# Convert to data frame and rank by p-value
+continuous_results_df <- as.data.frame(t(continuous_results))
+names(continuous_results_df) <- c("Variable", "P-Value")
+continuous_results_df <- continuous_results_df %>% arrange(as.numeric(`P-Value`))
+continuous_results_df
+```
+
+```{r}
+# Combine results into one table
+all_results_df <- bind_rows(
+  binary_results_df %>% mutate(Type = "Binary"),
+  ordinal_results_df %>% mutate(Type = "Ordinal"),
+  nominal_results_df %>% mutate(Type = "Nominal"),
+  continuous_results_df %>% mutate(Type = "Continuous")
+) %>% dplyr::select('Variable', 'P-Value', 'Type')
+
+# Arrange by P-Value (ascending)
+all_results_df <- all_results_df %>% arrange(Type, as.numeric(`P-Value`))
+
+# View the summarized table that includes all variables
+print(all_results_df[-1,])
+
+#Only include significant variables
+signif = all_results_df %>% subset(as.numeric(`P-Value`) < 0.002)
+print(signif[-1,])
+```
+
+Odds Ratios:
+```{r}
+# Find Odds Ratios
+Odds_Ratios <- sapply(binary_vars, function(var) {
+  test <- OddsRatio(table(train[[var]], train$INS))
+  return(c(var, test))
+})
+
+# Convert to data frame and rank by p-value
+odds_ratio_df <- as.data.frame(t(Odds_Ratios))
+names(odds_ratio_df) <- c("Variable", "Odds Ratio")
+odds_ratio_df$`Odds Ratio` = as.numeric(odds_ratio_df$`Odds Ratio`)
+odds_ratio_df <- odds_ratio_df %>% arrange(desc(`Odds Ratio`))
+odds_ratio_df[-1,]
+```
+The odds of a customer purchasing the insurance product are 3.47 times higher than not purchasing the insurance product when the customer has an investment account.
+
+Linearity Assumption:
+```{r}
+#Create GAM models
+for (var in continuous_vars){
+formula <- as.formula(paste("INS ~ s(", var, ")"))
+fit.gam <- mgcv::gam(formula, data=train, family=binomial(link="logit"), method = 'REML')
+print(summary(fit.gam))
+}
+```
+
+```{r}
+#Plot GAM models
+for (var in continuous_vars){
+train = train %>% mutate(CCPURC = ifelse(is.na(CCPURC), 0, CCPURC))
+formula <- as.formula(paste("INS ~ s(", var, ")"))
+fit.gam <- mgcv::gam(formula, data=train, family=binomial(link="logit"), method = 'REML')
+plot(fit.gam, all.terms = TRUE)
+}
+```
+
+```{r}
+#See if spline adds value
+for (var in continuous_vars){
+formula <- as.formula(paste("INS ~ s(", var, ")"))
+fit.gam <- mgcv::gam(formula, data=train, family=binomial(link="logit"), method = 'REML')
+formula2 <- as.formula(paste("INS ~", var))
+logit.model <- glm(formula2, data=train, family=binomial(link="logit"))
+print(anova(logit.model, fit.gam, test="LRT"))
+}
+```
+
+Linear: ACCTAGE, CASHBK, LOCBAL, MTGBAL, CCBAL, INCOME, LORES, HMVAL, AGE, CRSCORE
+
+
+
+Missing Values:
+```{r}
+#Determine which variables have the highest amount of missing values
+sort(colSums(is.na(train)), decreasing = TRUE)
+```
+```{r}
+missing_data <- train %>% dplyr::select('AGE', 'INCOME', 'LORES', 'HMVAL', 'HMOWN', 'PHONE', 'POS', 'POSAMT', 'INV', 'INVBAL', 'CC', 'CCBAL', 'CC') %>%
+  summarise_all(~sum(is.na(.))) %>%
+  gather(key = "Variable", value = "MissingValues")
+
+# Arrange the variables in descending order of missing values
+missing_data <- missing_data %>%
+  arrange(desc(MissingValues))
+
+# Create a bar plot to visualize missing values
+ggplot(missing_data, aes(x = reorder(Variable, -MissingValues), y = MissingValues)) +
+  geom_bar(stat = "identity", fill = "blue") +
+  labs(title = "Missing Values per Variable", x = "Variables", y = "Number of Missing Values") +
+  coord_flip() +
+  theme_minimal()
+```
+
+
+Redundant Variables:
+DDA and DDABAL
+SAV and SAVBAL
+ATM and ATMAMT
+CD and CDBAL
+IRA and IRABAL
+LOC and LOCBAL
+INV and INVBAL
+ILS and ILSBAL
+MM and MMBAL
+MTG and MTGBAL
+CC and CCBAL
+POS and POSAMT
+DDABAL and DEPAMT
+HV and HMOWN
+
+
+
+
+
